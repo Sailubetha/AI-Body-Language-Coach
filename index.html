@@ -118,6 +118,7 @@ input:focus,select:focus{border-color:#3498db;outline:none;}
 </div>
 
 <script>
+
 // ---------------- CONFIG ----------------
 const QUESTIONS = [
   "Tell me about yourself and your background.",
@@ -126,7 +127,9 @@ const QUESTIONS = [
   "Describe a challenge you overcame.",
   "Where do you see yourself in 5 years?"
 ];
-const QUESTION_TIME = 120; // 2 minutes
+const QUESTION_TIME = 120;
+
+// Multi-modal perception system combining pose, gesture, and facial analysis
 
 // Elements
 const nameInput = document.getElementById('username');
@@ -171,7 +174,11 @@ function setupMediaPipe(){
 // ---------------- CAMERA ----------------
 function startCamera(){
   cameraInstance = new Camera(document.getElementById('webcam'), {
-    onFrame: async ()=>{ await pose.send({image:document.getElementById('webcam')}); await faceMesh.send({image:document.getElementById('webcam')}); await hands.send({image:document.getElementById('webcam')}); },
+    onFrame: async ()=>{
+      await pose.send({image:webcam});
+      await faceMesh.send({image:webcam});
+      await hands.send({image:webcam});
+    },
     width:640,height:480
   });
   cameraInstance.start();
@@ -182,181 +189,170 @@ function stopCamera(){ if(cameraInstance){cameraInstance.stop();cameraInstance=n
 function onPoseResults(res){
   overlay.width=640; overlay.height=480;
   ctx.clearRect(0,0,overlay.width,overlay.height);
-  if(!res.poseLandmarks){ postureFeedback.textContent='No person detected'; return; }
-  const lm=res.poseLandmarks;
-  const leftShoulder=toXY(lm[11]), rightShoulder=toXY(lm[12]);
-  const leftElbow=toXY(lm[13]), rightElbow=toXY(lm[14]);
-  const leftWrist=toXY(lm[15]), rightWrist=toXY(lm[16]);
-  const leftHip=toXY(lm[23]), rightHip=toXY(lm[24]);
-  const nose=toXY(lm[0]);
 
-  drawLine(leftShoulder,rightShoulder,'lime');
-  drawLine(nose,{x:(leftHip.x+rightHip.x)/2,y:(leftHip.y+rightHip.y)/2}, 'lime');
-  drawLine(leftShoulder,leftElbow,'lime'); drawLine(leftElbow,leftWrist,'lime');
-  drawLine(rightShoulder,rightElbow,'lime'); drawLine(rightElbow,rightWrist,'lime');
-  [leftShoulder,rightShoulder,leftElbow,rightElbow,leftWrist,rightWrist,nose].forEach(p=>drawCircle(p.x,p.y,4,'lime'));
-
-  // --- Improved posture detection ---
-  const shoulderSlope = Math.abs(lm[11].y - lm[12].y);
-  const avgEarToShoulder = (Math.abs(lm[7].y - lm[11].y) + Math.abs(lm[8].y - lm[12].y)) / 2;
-  const headForward = Math.abs(lm[0].x - ((lm[11].x + lm[12].x)/2));
-  const spineAngle = Math.atan2((lm[23].y + lm[24].y)/2 - lm[0].y, (lm[23].x + lm[24].x)/2 - lm[0].x) * (180/Math.PI);
-
-  let msg='Good posture', color='green';
-  if(avgEarToShoulder < 0.22 || spineAngle < 70){ msg='Slouching — sit upright'; color='red'; summaryCounts.postureBad++; }
-  else if(shoulderSlope > 0.06){ msg='Uneven shoulders — adjust'; color='orange'; summaryCounts.postureBad++; }
-  else if(headForward > 0.10){ msg='Head forward — pull back'; color='orange'; summaryCounts.postureBad++; }
-  else summaryCounts.postureGood++;
-
-  postureFeedback.textContent = msg;
-  postureFeedback.style.color = color;
-  lastRightWrist=rightWrist;
-}
-function detectHandGesture(hand){
-    // If no hand or incomplete data, return "No hand"
-    if(!hand || hand.length < 21){
-        return ['No hand detected','gray'];
-    }
-
-    // Normalize by hand size (distance wrist–middle MCP)
-    const handSize = Math.hypot(hand[0].x - hand[9].x, hand[0].y - hand[9].y);
-    if(handSize < 0.05){ 
-        // tiny size means it’s far away / not reliable
-        return ['No hand detected','gray']; 
-    }
-
-    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) / handSize;
-
-    const indexUp = hand[8].y < hand[6].y;
-    const middleUp = hand[12].y < hand[10].y;
-    const ringUp = hand[16].y < hand[14].y;
-    const pinkyUp = hand[20].y < hand[18].y;
-    // Use relative position of thumb tip vs wrist for robustness
-
-
-
-    // Gestures
-    const isFist = dist(hand[0], hand[8]) < 0.3 && dist(hand[0], hand[12]) < 0.3;
-    const isOpenPalm = indexUp && middleUp && ringUp && pinkyUp;
-    const isPeace = indexUp && middleUp && !ringUp && !pinkyUp;
-    const isOK = dist(hand[4], hand[8]) < 0.25 && middleUp && ringUp && pinkyUp;
-    const isPointing = indexUp && !middleUp && !ringUp && !pinkyUp;
-
-    // Movement detection
-  // Movement detection (stricter)
-let movement='';
-if(lastRightWrist){
-    const dx = (hand[0].x*overlay.width - lastRightWrist.x)/overlay.width;
-    const dy = (hand[0].y*overlay.height - lastRightWrist.y)/overlay.height;
-    const dist = Math.hypot(dx, dy);
-
-    // Only flag if movement is VERY large (like dancing / waving wildly)
-    if(dist > 0.30) movement = 'Excessive hand movement (distracting)';
-}
-lastRightWrist = {x:hand[0].x*overlay.width, y:hand[0].y*overlay.height};
-
-    // Return gesture
-    
-
-    if(isFist) return ['Fist','orange'];
-    else if(isPeace) return ['Peace Sign','green'];
-    else if(isOK) return ['OK Sign','green'];
-    else if(isPointing) return ['Pointing','blue'];
-    else if(isOpenPalm) return ['Open Palm / Stop','green'];
-    else if(movement) return [movement,'orange'];
-    else return ['Good gesture','green'];
-}
-
-
-function onHandsResults(res){
-  // ✅ If no hand detected
-  if(!res.multiHandLandmarks || res.multiHandLandmarks.length === 0){
-    gestureFeedback.textContent = "No hand detected";
-    gestureFeedback.style.color = "gray";
-    lastRightWrist = null; // reset movement tracking
+  if(!res.poseLandmarks){
+    postureFeedback.textContent='No person detected';
     return;
   }
 
-  // If hands detected, process them
+  const lm=res.poseLandmarks;
+
+  const leftShoulder=toXY(lm[11]), rightShoulder=toXY(lm[12]);
+  const leftHip=toXY(lm[23]), rightHip=toXY(lm[24]);
+  const nose=toXY(lm[0]);
+
+  drawLine(leftShoulder,rightShoulder);
+  drawLine(nose,{x:(leftHip.x+rightHip.x)/2,y:(leftHip.y+rightHip.y)/2});
+
+  // -------- Improved Posture Logic --------
+  const shoulderSlope = Math.abs(lm[11].y - lm[12].y);
+  const spineAngle = Math.atan2(
+    (lm[23].y + lm[24].y)/2 - lm[0].y,
+    (lm[23].x + lm[24].x)/2 - lm[0].x
+  ) * (180/Math.PI);
+
+  const centerX = (lm[11].x + lm[12].x) / 2;
+  const deviation = Math.abs(lm[0].x - centerX);
+
+  let msg='Good posture', color='green';
+
+  if(spineAngle < 60){
+    msg='Slouching — straighten your back';
+    color='red';
+    summaryCounts.postureBad++;
+  }
+  else if(deviation > 0.08){
+    msg='Leaning sideways — sit centered';
+    color='orange';
+    summaryCounts.postureBad++;
+  }
+  else if(shoulderSlope > 0.06){
+    msg='Uneven shoulders — adjust';
+    color='orange';
+    summaryCounts.postureBad++;
+  }
+  else if(spineAngle > 85 && shoulderSlope < 0.04){
+    msg='Confident posture';
+    color='green';
+    summaryCounts.postureGood++;
+  }
+  else{
+    summaryCounts.postureGood++;
+  }
+
+  postureFeedback.textContent = msg;
+  postureFeedback.style.color = color;
+}
+
+// ---------------- HANDS ----------------
+function detectHandGesture(hand){
+
+  if(!hand || hand.length < 21){
+    return ['Hands not visible — keep hands in frame','gray'];
+  }
+
+  const indexUp = hand[8].y < hand[6].y;
+  const middleUp = hand[12].y < hand[10].y;
+  const ringUp = hand[16].y < hand[14].y;
+  const pinkyUp = hand[20].y < hand[18].y;
+
+  const isOpenPalm = indexUp && middleUp && ringUp && pinkyUp;
+  const isPointing = indexUp && !middleUp && !ringUp && !pinkyUp;
+
+  let movement='';
+
+  if(lastRightWrist){
+    const dx = hand[0].x - lastRightWrist.x;
+    const dy = hand[0].y - lastRightWrist.y;
+    const dist = Math.hypot(dx, dy);
+
+    if(dist > 0.2) movement = 'Excessive hand movement';
+  }
+
+  lastRightWrist = {x:hand[0].x, y:hand[0].y};
+
+  if(isOpenPalm) return ['Open palm — good','green'];
+  else if(isPointing) return ['Pointing gesture','blue'];
+  else if(movement) return [movement,'orange'];
+  else return ['Hands stable — good','green'];
+}
+
+function onHandsResults(res){
+
+  if(!res.multiHandLandmarks || res.multiHandLandmarks.length===0){
+    gestureFeedback.textContent="Hands not visible — keep hands in frame";
+    gestureFeedback.style.color="gray";
+    return;
+  }
+
   res.multiHandLandmarks.forEach(hand=>{
-    const connections=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],[0,17],[17,18],[18,19],[19,20]];
+    const [msg,color]=detectHandGesture(hand);
+    gestureFeedback.textContent=msg;
+    gestureFeedback.style.color=color;
 
-    // Draw hand skeleton
-    connections.forEach(([a,b])=>
-      drawLine(
-        {x:hand[a].x*overlay.width,y:hand[a].y*overlay.height},
-        {x:hand[b].x*overlay.width,y:hand[b].y*overlay.height},
-        'cyan'
-      )
-    );
-    hand.forEach(lm=>drawCircle(lm.x*overlay.width, lm.y*overlay.height,4,'cyan'));
-
-    // Detect gesture
-    const [gestureMsg, color] = detectHandGesture(hand);
-    gestureFeedback.textContent = gestureMsg;
-    gestureFeedback.style.color = color;
     if(color==='green') summaryCounts.gestureGood++;
-    else if(color!=='black') summaryCounts.gestureBad++; // ignore "no hand" case
+    else if(color!=='gray') summaryCounts.gestureBad++;
   });
 }
 
-
 // ---------------- FACE ----------------
 function detectFaceExpression(fl){
-    const eyeDist = Math.hypot(fl[33].x - fl[263].x, fl[33].y - fl[263].y);
-    const mouthWidth = Math.hypot(fl[61].x - fl[291].x, fl[61].y - fl[291].y) / eyeDist;
-    const mouthOpen  = Math.abs(fl[14].y - fl[13].y) / eyeDist;
-    const leftEyeOpen  = Math.abs(fl[159].y - fl[145].y) / eyeDist;
-    const rightEyeOpen = Math.abs(fl[386].y - fl[374].y) / eyeDist;
-    const browRaise = ((fl[159].y - fl[105].y) + (fl[386].y - fl[334].y)) / (2 * eyeDist);
-    const lipTilt = (fl[61].y - fl[291].y) / eyeDist;
 
-    // Smiling / Confident
-    if(mouthWidth > 0.32 && browRaise > 0.02) 
-        return ['Smiling / Confident', 'green'];
+  const eyeDist = Math.hypot(fl[33].x - fl[263].x, fl[33].y - fl[263].y);
+  const mouthWidth = Math.hypot(fl[61].x - fl[291].x, fl[61].y - fl[291].y) / eyeDist;
+  const mouthOpen  = Math.abs(fl[14].y - fl[13].y) / eyeDist;
 
-    // Surprised (lowered thresholds)
-    if(mouthOpen > 0.12 && browRaise > 0.03) 
-        return ['Surprised', 'orange'];
+  const faceCenter = (fl[33].x + fl[263].x) / 2;
 
-    // Angry / Stressed (check eyebrow slope and eye squint)
-    const browSlope = (fl[105].y - fl[159].y + fl[334].y - fl[386].y) / (2 * eyeDist);
-    if(browSlope > 0.02 && mouthOpen < 0.08) 
-        return ['Angry / Stressed', 'red'];
+  if(faceCenter < 0.3 || faceCenter > 0.7){
+    return ['Looking away — maintain eye contact','orange'];
+  }
 
-    // Sleepy / Low energy
-    if(leftEyeOpen < 0.03 && rightEyeOpen < 0.03) 
-        return ['Sleepy / Low energy', 'orange'];
+  if(mouthWidth > 0.32){
+    return ['Smiling / confident','green'];
+  }
 
-    // Mocking / Sarcastic (lower lip tilt threshold)
-    if(Math.abs(lipTilt) > 0.04 && mouthWidth > 0.30) 
-        return ['Mocking / Sarcastic', 'red'];
+  if(mouthWidth > 0.28 && mouthWidth < 0.32){
+    return ['Calm & confident','green'];
+  }
 
-    return ['Neutral / Attentive', 'blue'];
+  if(mouthOpen > 0.15){
+    return ['Nervous expression','orange'];
+  }
+
+  return ['Neutral / attentive','blue'];
 }
 
-
-
-
-
 function onFaceResults(res){
-  if(!res.multiFaceLandmarks || res.multiFaceLandmarks.length==0) { faceFeedback.textContent='No face detected'; return; }
+  if(!res.multiFaceLandmarks || res.multiFaceLandmarks.length==0){
+    faceFeedback.textContent='No face detected';
+    return;
+  }
+
   const fl=res.multiFaceLandmarks[0];
-  const [msg, color] = detectFaceExpression(fl);
-  faceFeedback.textContent = msg;
-  faceFeedback.style.color = color;
-  if(color==='green') summaryCounts.faceGood++; else summaryCounts.faceBad++;
+  const [msg,color]=detectFaceExpression(fl);
+
+  faceFeedback.textContent=msg;
+  faceFeedback.style.color=color;
+
+  if(color==='green') summaryCounts.faceGood++;
+  else summaryCounts.faceBad++;
 }
 
 // ---------------- INTERVIEW FLOW ----------------
 function startInterview(){
-  if(!nameInput.value || !roleInput.value){ alert('Enter name and role'); return; }
+  if(!nameInput.value || !roleInput.value){
+    alert('Enter name and role');
+    return;
+  }
+
   document.getElementById('inputPage').classList.remove('active');
   document.getElementById('interviewPage').classList.add('active');
 
   displayName.textContent=nameInput.value;
   userRole.textContent=roleInput.value;
   questionEl.textContent=QUESTIONS[qIndex];
+
   remaining=QUESTION_TIME;
   timerEl.textContent=formatTime(remaining);
 
@@ -366,31 +362,48 @@ function startInterview(){
   questionTimer=setInterval(()=>{
     remaining--;
     timerEl.textContent=formatTime(remaining);
-    if(remaining<=0){ nextQuestion(); }
+    if(remaining<=0) nextQuestion();
   },1000);
 }
 
 function nextQuestion(){
   qIndex++;
-  if(qIndex>=QUESTIONS.length){ stopInterview(); return; }
+  if(qIndex>=QUESTIONS.length){
+    stopInterview();
+    return;
+  }
+
   questionEl.textContent=QUESTIONS[qIndex];
   remaining=QUESTION_TIME;
-  timerEl.textContent=formatTime(remaining);
 }
 
 function stopInterview(){
   clearInterval(questionTimer);
   stopCamera();
+
   document.getElementById('summaryArea').style.display='block';
+
   const ctxSummary=document.getElementById('summaryChart').getContext('2d');
-  new Chart(ctxSummary,{type:'bar',data:{labels:['Posture','Gesture','Face'],datasets:[{label:'Good',data:[summaryCounts.postureGood,summaryCounts.gestureGood,summaryCounts.faceGood],backgroundColor:'lime'},{label:'Needs Improvement',data:[summaryCounts.postureBad,summaryCounts.gestureBad,summaryCounts.faceBad],backgroundColor:'red'}]},options:{responsive:true,plugins:{legend:{position:'top'},title:{display:true,text:'Interview Feedback Summary'}}}});
+
+  new Chart(ctxSummary,{
+    type:'bar',
+    data:{
+      labels:['Posture','Gesture','Face'],
+      datasets:[
+        {label:'Good',data:[summaryCounts.postureGood,summaryCounts.gestureGood,summaryCounts.faceGood]},
+        {label:'Needs Improvement',data:[summaryCounts.postureBad,summaryCounts.gestureBad,summaryCounts.faceBad]}
+      ]
+    }
+  });
 }
 
-// ---------------- EVENTS ----------------
+// EVENTS
 document.getElementById('startBtn').addEventListener('click', startInterview);
 document.getElementById('nextBtn').addEventListener('click', nextQuestion);
 document.getElementById('stopBtn').addEventListener('click', stopInterview);
+
 </script>
+
 
 </body>
 </html>
